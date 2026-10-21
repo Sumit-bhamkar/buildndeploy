@@ -1,0 +1,140 @@
+name: BuildNDeploy CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: buildndeploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  BACKEND_REPOSITORY: buildndeploy-backend
+  FRONTEND_REPOSITORY: buildndeploy-frontend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker build -t "$REGISTRY/$BACKEND_REPOSITORY:1.0" ./backend
+          docker push "$REGISTRY/$BACKEND_REPOSITORY:1.0"
+
+      - name: Build and push frontend
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker build \
+            --build-arg NGINX_CONF=nginx.aws.conf \
+            -t "$REGISTRY/$FRONTEND_REPOSITORY:1.1" \
+            ./frontend
+          docker push "$REGISTRY/$FRONTEND_REPOSITORY:1.1"
+
+      - name: Deploy backend, then frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_for_refresh() {
+            local group="$1"
+            local id="$2"
+
+            for attempt in $(seq 1 60); do
+              status=$(aws autoscaling describe-instance-refreshes \
+                --auto-scaling-group-name "$group" \
+                --instance-refresh-ids "$id" \
+                --query 'InstanceRefreshes[0].Status' \
+                --output text)
+
+              echo "$group: $status"
+
+              if [ "$status" = "Successful" ]; then
+                return 0
+              fi
+
+              case "$status" in
+                Failed|Cancelled|RollbackFailed|RollbackSuccessful)
+                  echo "Refresh failed or rolled back."
+                  return 1
+                  ;;
+              esac
+
+              sleep 30
+            done
+
+            echo "Timed out waiting for $group"
+            return 1
+          }
+
+          deploy_group() {
+            local group="$1"
+            local template="$2"
+
+            echo "Creating a new version of $template"
+
+            version=$(aws ec2 create-launch-template-version \
+              --launch-template-name "$template" \
+              --source-version '$Latest' \
+              --version-description "GitHub Actions ${GITHUB_SHA}" \
+              --query 'LaunchTemplateVersion.VersionNumber' \
+              --output text)
+
+            aws ec2 modify-launch-template \
+              --launch-template-name "$template" \
+              --default-version "$version"
+
+            aws autoscaling update-auto-scaling-group \
+              --auto-scaling-group-name "$group" \
+              --launch-template "LaunchTemplateName=$template,Version=$version"
+
+            id=$(aws autoscaling start-instance-refresh \
+              --auto-scaling-group-name "$group" \
+              --preferences \
+                '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"InstanceWarmup":180}' \
+              --query 'InstanceRefreshId' \
+              --output text)
+
+            echo "Started refresh $id for $group"
+            wait_for_refresh "$group" "$id"
+          }
+
+          deploy_group buildndeploy-app-asg buildndeploy-app-template
+          deploy_group buildndeploy-web-asg buildndeploy-web-template
+
+      - name: Verify public website
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error \
+              --max-time 10 http://buildndeploy.online/ -o /dev/null; then
+              echo "Website responds successfully."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Website verification failed."
+          exit 1

@@ -99,24 +99,8 @@ jobs:
 
           deploy_group() {
             local group="$1"
-            local template="$2"
 
-            echo "Creating a new version of $template"
-
-            version=$(aws ec2 create-launch-template-version \
-              --launch-template-name "$template" \
-              --source-version '$Latest' \
-              --version-description "GitHub Actions ${GITHUB_SHA}" \
-              --query 'LaunchTemplateVersion.VersionNumber' \
-              --output text)
-
-            aws ec2 modify-launch-template \
-              --launch-template-name "$template" \
-              --default-version "$version"
-
-            aws autoscaling update-auto-scaling-group \
-              --auto-scaling-group-name "$group" \
-              --launch-template "LaunchTemplateName=$template,Version=$version"
+            echo "Starting instance refresh for $group"
 
             id=$(aws autoscaling start-instance-refresh \
               --auto-scaling-group-name "$group" \
@@ -129,8 +113,8 @@ jobs:
             wait_for_refresh "$group" "$id"
           }
 
-          deploy_group buildndeploy-app-asg buildndeploy-app-template
-          deploy_group buildndeploy-web-asg buildndeploy-web-template
+          deploy_group buildndeploy-app-asg
+          deploy_group buildndeploy-web-asg
 
       - name: Verify public website
         run: |

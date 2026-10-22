@@ -23,7 +23,7 @@ button:disabled {
 /* Main layout */
 .app {
   min-height: 100vh;
-  background: #f7f8fc;
+  background: #eef4ff;
   color: #20243a;
   font-family: Inter, Arial, sans-serif;
 }

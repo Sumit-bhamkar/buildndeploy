@@ -138,8 +138,8 @@ function App() {
       <aside className="sidebar">
         <a className="brand" href="/">
           <span className="brand-icon">B</span>
-          <span>
-  Build<span className="accent">N</span>Deploy — CI/CD Test v2
+         <span>
+  Build<span className="accent">N</span>Deploy
 </span>
         </a>
 

@@ -139,8 +139,8 @@ function App() {
         <a className="brand" href="/">
           <span className="brand-icon">B</span>
           <span>
-            Build<span className="accent">N</span>Deploy
-          </span>
+  Build<span className="accent">N</span>Deploy — CI/CD Test v2
+</span>
         </a>
 
         <p className="nav-label">WORKSPACE</p>
